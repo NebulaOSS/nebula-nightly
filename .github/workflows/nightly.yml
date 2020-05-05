@@ -1,0 +1,53 @@
+on:
+  schedule:
+    - cron: '0 1 * * *'
+
+name: Tag nightly
+
+jobs:
+  tag-nightly:
+    name: Tag nightly
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          repository: 'slackhq/nebula'
+          fetch-depth: 0
+
+      - name: Build
+        run: |
+          eval "$(ssh-agent -s)"
+          ssh-add - <<< "${{ secrets.DEPLOY_KEY }}"
+
+          git remote add nightly "git@github.com:${GITHUB_REPOSITORY}.git"
+          git fetch --tags origin
+          git fetch --no-tags nightly
+
+          # find the latest version tag on master
+          LATEST="$(git describe --tags --long --match 'v[0-9]*' --exclude '*-*' | cut -d- -f 1)"
+          if [ -z "$LATEST" ]
+          then
+            echo "failed to find latest tag" >&2
+            exit 1
+          fi
+
+          # advance to the next patch version
+          MAJOR_MINOR="$(echo "$LATEST" | cut -d. -f 1-2)"
+          PATCH="$(echo "$LATEST" | cut -d. -f 3)"
+          NEXT="$MAJOR_MINOR.$((PATCH + 1))"
+
+          # don't build if we already have built this SHA for the same patch version
+          BRANCH="nightly-$NEXT"
+          if NIGHTLY_SHA="$(git rev-parse --quiet --verify "nightly/$BRANCH")"
+          then
+            if [ "$NIGHTLY_SHA" = "$(git rev-parse --quiet --verify HEAD)" ]
+            then
+              echo "we already built $NIGHTLY_SHA as $BRANCH, skipping tonight's nightly build"
+              exit 0
+            fi
+          fi
+
+          TAG="$NEXT-nightly$(date +%Y%m%d)"
+          git tag "$TAG"
+          git push nightly "HEAD:$BRANCH" "$TAG"
