@@ -37,6 +37,12 @@ jobs:
           PATCH="$(echo "$LATEST" | cut -d. -f 3)"
           NEXT="$MAJOR_MINOR.$((PATCH + 1))"
 
+          # Remove once v2.0.0 is tagged
+          if [ "$LATEST" = "v1.9.4" ]
+          then
+            NEXT="v2.0.0"
+          fi
+
           # don't build if we already have built this SHA for the same patch version
           BRANCH="nightly-$NEXT"
           if NIGHTLY_SHA="$(git rev-parse --quiet --verify "nightly/$BRANCH")"
