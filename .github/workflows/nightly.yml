@@ -1,6 +1,5 @@
 on:
-  schedule:
-    - cron: '0 4 * * *'
+  push:
 
 name: Tag nightly
 
@@ -72,6 +71,5 @@ jobs:
             fi
 
             TAG="$NEXT-nightly$(date +%Y%m%d)"
-            git tag "$TAG" "$REF_SHA"
-            git push nightly "$REF_SHA:refs/heads/$BRANCH" "$TAG"
+            echo git tag "$TAG" "$REF_SHA"
           done
