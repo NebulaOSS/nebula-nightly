@@ -10,10 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v7
         with:
           repository: 'slackhq/nebula'
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Build
         run: |
@@ -21,33 +22,56 @@ jobs:
           ssh-add - <<< "${{ secrets.DEPLOY_KEY }}"
 
           git remote add nightly "git@github.com:${GITHUB_REPOSITORY}.git"
-          git fetch --tags origin
           git fetch --no-tags nightly
 
-          # find the latest version tag on master
-          LATEST="$(git describe --tags --long --match 'v[0-9]*' --exclude '*-*' | cut -d- -f 1)"
-          if [ -z "$LATEST" ]
-          then
-            echo "failed to find latest tag" >&2
-            exit 1
-          fi
+          # build nightlies for master and every release-* branch
+          SRC_BRANCHES="$(git for-each-ref --format='%(refname:strip=3)' \
+            'refs/remotes/origin/master' 'refs/remotes/origin/release-*')"
 
-          # advance to the next patch version
-          MAJOR_MINOR="$(echo "$LATEST" | cut -d. -f 1-2)"
-          PATCH="$(echo "$LATEST" | cut -d. -f 3)"
-          NEXT="$MAJOR_MINOR.$((PATCH + 1))"
+          for SRC in $SRC_BRANCHES
+          do
+            REF="origin/$SRC"
+            REF_SHA="$(git rev-parse --quiet --verify "$REF")"
+            echo "checking $REF ($REF_SHA)"
 
-          # don't build if we already have built this SHA for the same patch version
-          BRANCH="nightly-$NEXT"
-          if NIGHTLY_SHA="$(git rev-parse --quiet --verify "nightly/$BRANCH")"
-          then
-            if [ "$NIGHTLY_SHA" = "$(git rev-parse --quiet --verify HEAD)" ]
+            # find the latest version tag on this branch
+            LATEST="$(git describe --tags --long --match 'v[0-9]*' --exclude '*-*' "$REF" | cut -d- -f 1)"
+            if [ -z "$LATEST" ]
             then
-              echo "we already built $NIGHTLY_SHA as $BRANCH, skipping tonight's nightly build"
-              exit 0
+              echo "failed to find latest tag for $REF, skipping" >&2
+              continue
             fi
-          fi
 
-          TAG="$NEXT-nightly$(date +%Y%m%d)"
-          git tag "$TAG"
-          git push nightly "HEAD:$BRANCH" "$TAG"
+            # nothing new to build if the latest tag already points at the branch head
+            if [ "$(git rev-parse --quiet --verify "$LATEST^{commit}")" = "$REF_SHA" ]
+            then
+              echo "$LATEST is already the head of $REF, skipping" >&2
+              continue
+            fi
+
+            # master targets the next minor version; release-* branches target the next patch
+            MAJOR="$(echo "$LATEST" | cut -d. -f 1)"
+            MINOR="$(echo "$LATEST" | cut -d. -f 2)"
+            PATCH="$(echo "$LATEST" | cut -d. -f 3)"
+            if [ "$SRC" = "master" ]
+            then
+              NEXT="$MAJOR.$((MINOR + 1)).0"
+            else
+              NEXT="$MAJOR.$MINOR.$((PATCH + 1))"
+            fi
+
+            # don't build if we already have built this SHA for the same patch version
+            BRANCH="nightly-$NEXT"
+            if NIGHTLY_SHA="$(git rev-parse --quiet --verify "nightly/$BRANCH")"
+            then
+              if [ "$NIGHTLY_SHA" = "$REF_SHA" ]
+              then
+                echo "we already built $NIGHTLY_SHA as $BRANCH, skipping tonight's nightly build"
+                continue
+              fi
+            fi
+
+            TAG="$NEXT-nightly$(date +%Y%m%d)"
+            git tag "$TAG" "$REF_SHA"
+            git push nightly "$REF_SHA:refs/heads/$BRANCH" "$TAG"
+          done
